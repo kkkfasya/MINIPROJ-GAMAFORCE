@@ -53,3 +53,11 @@ FC_STALE_TIMEOUT = 5.0
 SERVER_HOST = "0.0.0.0"
 SERVER_PORT = 8080
 TELEMETRY_POLL_MS = 200
+
+# ---------------------------------------------------------------------------
+# WebSocket (push state; polling tetap menjadi fallback di dashboard)
+# ---------------------------------------------------------------------------
+WS_ENABLED = True
+WS_HOST = SERVER_HOST
+WS_PORT = 8081
+WS_PUSH_HZ = 10

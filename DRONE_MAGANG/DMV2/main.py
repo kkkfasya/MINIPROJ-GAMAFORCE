@@ -5,11 +5,14 @@ Menggabungkan:
   * deteksi kotak merah              -> ``detection.detect_boxes``
   * telemetri Flight Controller      -> ``telemetry.TelemetryWorker``
   * web server + MJPEG + JSON API    -> ``DroneHTTPServer``
+  * push state real-time             -> ``ws_server.WebSocketServer``
 
 Jalankan dengan:
     python3 main.py
 
 Lalu buka ``http://<IP_RASPBERRY_PI>:8080`` dari browser laptop.
+Dashboard memakai WebSocket bila tersedia dan otomatis kembali ke polling
+JSON bila koneksi WebSocket gagal.
 """
 
 import json
@@ -24,6 +27,7 @@ import cv2
 import config
 from detection import detect_boxes
 from telemetry import TelemetryWorker
+from ws_server import WebSocketServer
 
 BASE_DIR = Path(__file__).resolve().parent
 DASHBOARD_PATH = BASE_DIR / "dashboard.html"
@@ -262,6 +266,7 @@ class StreamingHandler(BaseHTTPRequestHandler):
             return
 
         html = html.replace("{{TELEMETRY_POLL_MS}}", str(config.TELEMETRY_POLL_MS))
+        html = html.replace("{{WS_PORT}}", str(config.WS_PORT))
         self._send_bytes(html.encode("utf-8"), "text/html; charset=utf-8")
 
     def _serve_stream(self):
@@ -351,9 +356,13 @@ def main():
         telemetry.stop()
         return 1
 
+    ws_server = WebSocketServer(camera, telemetry)
+    ws_server.start()
+
     print(f"[INFO] Dashboard: http://<IP_RASPBERRY_PI>:{config.SERVER_PORT}/")
     print(f"[INFO] Stream   : http://<IP_RASPBERRY_PI>:{config.SERVER_PORT}/stream.mjpg")
     print(f"[INFO] Telemetri: http://<IP_RASPBERRY_PI>:{config.SERVER_PORT}/telemetry.json")
+    print(f"[INFO] Deteksi  : http://<IP_RASPBERRY_PI>:{config.SERVER_PORT}/detections.json")
     print("[INFO] Tekan Ctrl+C untuk berhenti.")
 
     try:
@@ -361,6 +370,7 @@ def main():
     except KeyboardInterrupt:
         print("\n[INFO] Menutup aplikasi...")
     finally:
+        ws_server.stop()
         server.server_close()
         camera.stop()
         telemetry.stop()

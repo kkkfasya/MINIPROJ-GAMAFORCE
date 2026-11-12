@@ -315,6 +315,7 @@
     <span class="pill" id="videoPill"><span class="dot"></span>Video: menghubungkan</span>
     <span class="pill" id="fcPill"><span class="dot"></span>FC: menunggu</span>
     <span class="pill" id="detPill"><span class="dot"></span>0 objek</span>
+    <span class="pill" id="dataPill"><span class="dot"></span>Data: memulai</span>
   </div>
 </header>
 
@@ -417,6 +418,10 @@
   "use strict";
 
   var POLL_MS = Number("{{TELEMETRY_POLL_MS}}") || 500;
+  var WS_PORT = Number("{{WS_PORT}}") || 8081;
+  var WS_URL =
+    (location.protocol === "https:" ? "wss:" : "ws:") +
+    "//" + location.hostname + ":" + WS_PORT + "/ws";
 
   var $ = function (id) { return document.getElementById(id); };
 
@@ -445,13 +450,38 @@
 
   function pill(el, state, text) {
     if (!el) return;
+
+    // Jangan sentuh DOM bila isi pill tidak berubah. Ini penting karena
+    // header memakai backdrop-filter; setiap tulis ulang memicu repaint.
+    var key = state + "|" + text;
+    if (el._pillKey === key) return;
+    el._pillKey = key;
     el.className = "pill" + (state ? " " + state : "");
-    el.innerHTML = '<span class="dot"></span>' + text;
+
+    var dot = el.firstChild;
+    if (!dot || dot.className !== "dot") {
+      dot = document.createElement("span");
+      dot.className = "dot";
+      el.replaceChildren(dot);
+    }
+
+    var label = dot.nextSibling;
+    if (!label || label.nodeType !== 3) {
+      label = document.createTextNode(text);
+      dot.after(label);
+    } else if (label.nodeValue !== text) {
+      label.nodeValue = text;
+    }
   }
 
   // ------------------------------------------------------------------
   // Telemetri
   // ------------------------------------------------------------------
+  // "x s lalu" berubah tiap tick; batasi 1 Hz agar header tidak repaint
+  // 10x/detik hanya karena teks umur data.
+  var AGE_RENDER_MS = 1000;
+  var lastAgeRender = -Infinity;
+
   function renderTelemetry(t) {
     var hasData = t.last_update !== null && t.last_update !== undefined;
 
@@ -479,8 +509,14 @@
     var bar = $("batteryBar");
     if (bar) {
       var pct = hasBattery ? Math.max(0, Math.min(100, Number(t.battery_remaining))) : 0;
-      bar.style.width = pct + "%";
-      bar.style.background = pct > 50 ? "var(--green)" : pct > 20 ? "var(--yellow)" : "var(--red)";
+      var width = pct + "%";
+      if (bar.style.width !== width) bar.style.width = width;
+
+      var color = pct > 50 ? "var(--green)" : pct > 20 ? "var(--yellow)" : "var(--red)";
+      if (bar.dataset.color !== color) {
+        bar.dataset.color = color;
+        bar.style.background = color;
+      }
     }
 
     // Posisi & kecepatan
@@ -525,15 +561,19 @@
       pill(fcPill, "ok", "FC: live");
     }
 
-    var agePill = $("agePill");
-    if (hasData && t.age !== null && t.age !== undefined) {
-      agePill.className = "pill" + (t.stale ? " warn" : " ok");
-      agePill.innerHTML = '<span class="dot"></span>' + num(t.age, 1) + " s lalu";
-      setText("lastSeen", "Update: " + num(t.age, 1) + " s lalu");
-    } else {
-      agePill.className = "pill";
-      agePill.innerHTML = '<span class="dot"></span>--';
-      setText("lastSeen", "Update: --");
+    var nowAge = performance.now();
+    if (nowAge - lastAgeRender >= AGE_RENDER_MS) {
+      lastAgeRender = nowAge;
+
+      var agePill = $("agePill");
+      if (hasData && t.age !== null && t.age !== undefined) {
+        var ageText = num(t.age, 1) + " s lalu";
+        pill(agePill, t.stale ? "warn" : "ok", ageText);
+        setText("lastSeen", "Update: " + ageText);
+      } else {
+        pill(agePill, "", "--");
+        setText("lastSeen", "Update: --");
+      }
     }
   }
 
@@ -555,8 +595,20 @@
   // ------------------------------------------------------------------
   // Deteksi
   // ------------------------------------------------------------------
+  var detSig = null;
+
   function renderDetections(data) {
     var count = data && typeof data.count === "number" ? data.count : 0;
+    var boxes = (data && data.boxes) || [];
+
+    // Lewati rebuild DOM bila isi deteksi sama persis.
+    var sig =
+      count + ":" +
+      (data && data.frame_width) + "x" + (data && data.frame_height) + ":" +
+      JSON.stringify(boxes);
+    if (sig === detSig) return;
+    detSig = sig;
+
     setText("detBadge", "Deteksi: " + count);
     setText("detCountPill", String(count));
     pill($("detPill"), count > 0 ? "ok" : "", count + " objek");
@@ -568,12 +620,12 @@
     var list = $("detList");
     if (!list) return;
 
-    if (!data || !data.boxes || data.boxes.length === 0) {
+    if (boxes.length === 0) {
       list.innerHTML = '<div class="empty">Belum ada kotak merah terdeteksi.</div>';
       return;
     }
 
-    var rows = data.boxes.map(function (box) {
+    var rows = boxes.map(function (box) {
       return (
         '<div class="det-row">' +
           "<b>#" + (box.cx) + ", " + (box.cy) + "</b>" +
@@ -583,6 +635,17 @@
       );
     });
     list.innerHTML = rows.join("");
+  }
+
+  function renderCamera(camera) {
+    if (!camera) return;
+    setText("fpsPill", num(camera.fps, 1) + " FPS");
+    if (camera.frame_width) {
+      setText(
+        "resolution",
+        "Resolusi: " + camera.frame_width + "×" + camera.frame_height
+      );
+    }
   }
 
   var detectionsBusy = false;
@@ -621,29 +684,155 @@
   stream.addEventListener("error", streamFailed);
 
   // ------------------------------------------------------------------
-  // Loop polling
+  // Polling fallback
   // ------------------------------------------------------------------
   // Telemetri dipoll cepat; deteksi cukup lebih lambat agar Pi tidak berat.
+  // Loop ini hanya aktif saat WebSocket belum tersambung.
   var DETECTION_POLL_MS = Math.max(POLL_MS * 2, 500);
+  var telemetryTimer = null;
+  var detectionsTimer = null;
+  var healthTimer = null;
+  var healthBusy = false;
 
-  pollTelemetry();
-  pollDetections();
-  setInterval(pollTelemetry, POLL_MS);
-  setInterval(pollDetections, DETECTION_POLL_MS);
-
-  // Health ringan untuk FPS (opsional, tidak mengganggu bila gagal).
-  setInterval(function () {
+  function pollHealth() {
+    if (healthBusy) return;
+    healthBusy = true;
     fetchJSON("health", 2000)
       .then(function (h) {
-        if (h && h.camera) {
-          setText("fpsPill", num(h.camera.fps, 1) + " FPS");
-          if (h.camera.frame_width) {
-            setText("resolution", "Resolusi: " + h.camera.frame_width + "×" + h.camera.frame_height);
-          }
-        }
+        if (h) renderCamera(h.camera);
       })
-      .catch(function () {});
-  }, Math.max(POLL_MS * 5, 1000));
+      .catch(function () {})
+      .finally(function () {
+        healthBusy = false;
+      });
+  }
+
+  function startPolling() {
+    if (telemetryTimer) return;
+    pollTelemetry();
+    pollDetections();
+    pollHealth();
+    telemetryTimer = setInterval(pollTelemetry, POLL_MS);
+    detectionsTimer = setInterval(pollDetections, DETECTION_POLL_MS);
+    healthTimer = setInterval(pollHealth, Math.max(POLL_MS * 5, 1000));
+  }
+
+  function stopPolling() {
+    if (telemetryTimer) {
+      clearInterval(telemetryTimer);
+      telemetryTimer = null;
+    }
+    if (detectionsTimer) {
+      clearInterval(detectionsTimer);
+      detectionsTimer = null;
+    }
+    if (healthTimer) {
+      clearInterval(healthTimer);
+      healthTimer = null;
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // WebSocket + fallback polling
+  // ------------------------------------------------------------------
+  var ws = null;
+  var wsRetry = 0;
+  var wsRetryTimer = null;
+  var wsWatchdog = null;
+
+  // Telemetri tetap dirender tiap pesan (10 Hz); deteksi, kamera, dan pill
+  // cukup ~4 Hz seperti mode polling. Ini yang menjaga video tetap mulus.
+  var META_RENDER_MS = 250;
+  var lastMetaRender = -Infinity;
+
+  function armWsWatchdog(socket) {
+    if (wsWatchdog) clearTimeout(wsWatchdog);
+    wsWatchdog = setTimeout(function () {
+      // Server menerima koneksi tetapi tidak mengirim state: paksa fallback.
+      if (ws === socket) socket.close();
+    }, 5000);
+  }
+
+  function scheduleWsReconnect() {
+    if (wsRetryTimer) return;
+    var delay = Math.min(1000 * Math.pow(2, wsRetry), 10000);
+    wsRetry += 1;
+    wsRetryTimer = setTimeout(function () {
+      wsRetryTimer = null;
+      connectWebSocket();
+    }, delay);
+  }
+
+  function connectWebSocket() {
+    if (ws) return;
+    if (!("WebSocket" in window) || !location.hostname) {
+      pill($("dataPill"), "", "Data: polling");
+      return;
+    }
+
+    pill($("dataPill"), "warn", "Data: menyambung");
+
+    var socket;
+    try {
+      socket = new WebSocket(WS_URL);
+    } catch (err) {
+      pill($("dataPill"), "bad", "Data: polling");
+      scheduleWsReconnect();
+      return;
+    }
+    ws = socket;
+
+    socket.onopen = function () {
+      if (ws !== socket) return;
+      wsRetry = 0;
+      stopPolling();
+      pill($("dataPill"), "ok", "Data: websocket");
+      armWsWatchdog(socket);
+    };
+
+    socket.onmessage = function (event) {
+      if (ws !== socket) return;
+      armWsWatchdog(socket);
+
+      var state;
+      try {
+        state = JSON.parse(event.data);
+      } catch (err) {
+        return;
+      }
+      if (!state || (state.type && state.type !== "state")) return;
+
+      if (state.telemetry) renderTelemetry(state.telemetry);
+
+      var now = performance.now();
+      if (now - lastMetaRender >= META_RENDER_MS) {
+        lastMetaRender = now;
+        if (state.camera) renderCamera(state.camera);
+        if (state.detections) renderDetections(state.detections);
+      }
+    };
+
+    socket.onclose = function () {
+      if (ws !== socket) return;
+      ws = null;
+      if (wsWatchdog) {
+        clearTimeout(wsWatchdog);
+        wsWatchdog = null;
+      }
+      pill($("dataPill"), "bad", "Data: polling");
+      startPolling();
+      scheduleWsReconnect();
+    };
+
+    socket.onerror = function () {
+      socket.close();
+    };
+  }
+
+  // Mulai dengan polling agar dashboard langsung terisi; WebSocket
+  // menggantikannya begitu koneksi berhasil.
+  startPolling();
+  connectWebSocket();
 })();
 </script>
 </body>

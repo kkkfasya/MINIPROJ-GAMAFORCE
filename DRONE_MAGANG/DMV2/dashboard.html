@@ -471,7 +471,7 @@
 
     // Baterai
     var hasBattery = t.battery_remaining !== null && t.battery_remaining !== undefined;
-    setText("battery", hasBattery ? String(t.battery_remaining) : "--");
+    setText("battery", hasBattery ? String(t.battery_remaining) : "N/A");
     setText(
       "batterySub",
       "tegangan " + num(t.battery_voltage, 2) + " V · arus " + num(t.battery_current, 2) + " A"
@@ -488,8 +488,8 @@
     var hasLon = t.longitude !== null && t.longitude !== undefined;
     var noFix = t.fix_type === 0 || t.fix_type === 1;
     var showPosition = hasLat && hasLon && !noFix;
-    setText("latitude", showPosition ? num(t.latitude, 6) + "°" : "--");
-    setText("longitude", showPosition ? num(t.longitude, 6) + "°" : "--");
+    setText("latitude", showPosition ? num(t.latitude, 6) + "°" : "N/A");
+    setText("longitude", showPosition ? num(t.longitude, 6) + "°" : "N/A");
 
     var hasAirspeed = t.airspeed !== null && t.airspeed !== undefined;
     setText("airspeed", hasAirspeed ? num(t.airspeed, 1) + " m/s" : "--");

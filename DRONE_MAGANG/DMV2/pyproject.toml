@@ -1,0 +1,22 @@
+[project]
+name = "dmv2"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "IlkhamAbdillah", email = "muhammadilkhamabdillah@mail.ugm.ac.id" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "opencv-python>=5.0.0.93",
+    "pymavlink>=2.4.50",
+    "pyserial>=3.5",
+    "websockets>=17.4",
+]
+
+[project.scripts]
+dmv2 = "dmv2:main"
+
+[build-system]
+requires = ["uv_build>=0.13.7,<0.14.0"]
+build-backend = "uv_build"

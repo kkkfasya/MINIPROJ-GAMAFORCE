@@ -1,0 +1,30 @@
+TUGAS:
+kamera + opencv = streaming + object detection
+data dari FC = altitude & ground speed sebagai data utama, data lain kita taroh di bagian extra
+
+/dev
+FC -> ACM0
+CAM -> index 0
+
+BOX COLOR:
+#6c111c -> lower 1
+#7e111e -> lower 2
+
+#ba2839 -> upper 1
+#ab1e2f -> upper 2
+
+port raspi cuma 2 yg dibawah; yg di atas rusak
+
+Design Desicion:
+kamera raspi diakses via browser agar kompatible di smua plaform
+Ubuntu menggunakan GNOME dengan Protocol display server bernama Wayland
+sedangkan OpenCV membuka Window via X11, agar kompatibel dan simpel, diakseslah via browser
+
+
+        # 2. Definisikan batas warna merah (Merah berada di ujung awal dan akhir nilai Hue)
+        lower_red2 = np.array([170, 170, 90])   # S diturunkan ke 170, V ke 80 agar tahan bayangan
+        upper_red2 = np.array([180, 255, 240])  # V dinaikkan ke 210 agar tahan sorotan terang
+
+        # Rentang cadangan (Jika ada gradasi merah yang sedikit menyeberang ke Hue 0-10)
+        lower_red1 = np.array([0, 170, 90])
+        upper_red1 = np.array([10, 255, 240])
